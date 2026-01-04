@@ -2,6 +2,8 @@
 
 set -e
 
+INSTALL_DIR="/opt/version2-netwise"
+
 echo "============================================"
 echo "  Version2 NetWise - Instalação NATIVA"
 echo "  (Sem Docker - Debian 12)"
@@ -24,43 +26,60 @@ if ! command -v node &> /dev/null; then
     apt-get install -y -qq nodejs
 fi
 
-# 3. Configurar PostgreSQL
+# 3. Clonar repositório se não existir
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "📥 Clonando repositório para $INSTALL_DIR..."
+    git clone https://github.com/vitorsandino/version2-net-wise-local.git "$INSTALL_DIR"
+else
+    echo "📂 Diretório $INSTALL_DIR já existe, atualizando..."
+    cd "$INSTALL_DIR"
+    git pull
+fi
+
+cd "$INSTALL_DIR"
+
+# 4. Configurar PostgreSQL
 echo "🐘 Configurando PostgreSQL..."
+# Garantir que o serviço está rodando
+systemctl start postgresql
 sudo -u postgres psql -c "CREATE USER version2 WITH PASSWORD 'version2_pass';" || true
 sudo -u postgres psql -c "CREATE DATABASE version2_netwise OWNER version2;" || true
-sudo -u postgres psql -d version2_netwise -f backend/database/schema.sql
+sudo -u postgres psql -d version2_netwise -f "$INSTALL_DIR/backend/database/schema.sql"
 
-# 4. Instalar dependências do Backend
+# 5. Instalar dependências do Backend
 echo "🚀 Configurando Backend..."
-cd backend
+cd "$INSTALL_DIR/backend"
 npm install
-cp .env.example .env
-# Gerar chaves
-JWT_SECRET=$(openssl rand -hex 64)
-ENCRYPTION_KEY=$(openssl rand -hex 64)
-sed -i "s/JWT_SECRET=.*/JWT_SECRET=$JWT_SECRET/" .env
-sed -i "s/ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$ENCRYPTION_KEY/" .env
-sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=version2_pass/" .env
-cd ..
+if [ ! -f ".env" ]; then
+    cp .env.example .env
+    # Gerar chaves
+    JWT_SECRET=$(openssl rand -hex 64)
+    ENCRYPTION_KEY=$(openssl rand -hex 64)
+    sed -i "s/JWT_SECRET=.*/JWT_SECRET=$JWT_SECRET/" .env
+    sed -i "s/ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$ENCRYPTION_KEY/" .env
+    sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=version2_pass/" .env
+    sed -i "s/DB_HOST=.*/DB_HOST=localhost/" .env
+fi
 
-# 5. Instalar dependências do Frontend e Build
+# 6. Instalar dependências do Frontend e Build
 echo "💻 Configurando Frontend..."
-cd frontend
+cd "$INSTALL_DIR/frontend"
 npm install
-cp .env.example .env
-# Detectar IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
-sed -i "s|VITE_API_URL=.*|VITE_API_URL=http://$SERVER_IP:3000/api|" .env
+if [ ! -f ".env" ]; then
+    cp .env.example .env
+    # Detectar IP
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    sed -i "s|VITE_API_URL=.*|VITE_API_URL=http://$SERVER_IP:3000/api|" .env
+fi
 npm run build
-cd ..
 
-# 6. Configurar Nginx
+# 7. Configurar Nginx
 echo "🌐 Configurando Nginx..."
 cat > /etc/nginx/sites-available/version2-netwise << EOF
 server {
     listen 80;
     server_name _;
-    root $(pwd)/frontend/dist;
+    root $INSTALL_DIR/frontend/dist;
     index index.html;
 
     location / {
@@ -91,7 +110,7 @@ ln -sf /etc/nginx/sites-available/version2-netwise /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 systemctl restart nginx
 
-# 7. Criar serviço Systemd para o Backend
+# 8. Criar serviço Systemd para o Backend
 echo "⚙️ Criando serviço systemd..."
 cat > /etc/systemd/system/v2-backend.service << EOF
 [Unit]
@@ -100,8 +119,8 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=$(logname)
-WorkingDirectory=$(pwd)/backend
+User=root
+WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 Environment=NODE_ENV=production
@@ -117,5 +136,5 @@ systemctl start v2-backend
 echo ""
 echo "============================================"
 echo "✅ Instalação Nativa Concluída!"
-echo "📍 Acesse: http://$SERVER_IP"
+echo "📍 Acesse: http://$(hostname -I | awk '{print $1}')"
 echo "============================================"
