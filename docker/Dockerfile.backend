@@ -5,10 +5,11 @@ WORKDIR /app
 # Instalar dependências do sistema
 RUN apk add --no-cache curl
 
-# Copiar package.json e instalar dependências
-# O contexto de build será a raiz do projeto, então o caminho é backend/package*.json
+# Copiar package.json
 COPY backend/package*.json ./
-RUN npm ci --only=production
+
+# Usar npm install em vez de ci para maior flexibilidade com locks
+RUN npm install --omit=dev
 
 # Copiar código fonte do backend
 COPY backend/ ./
