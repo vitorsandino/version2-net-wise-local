@@ -26,8 +26,8 @@ services:
   # Backend API
   backend:
     build:
-      context: ./backend
-      dockerfile: ../docker/Dockerfile.backend
+      context: .
+      dockerfile: docker/Dockerfile.backend
     container_name: v2netwise-backend
     restart: unless-stopped
     environment:
@@ -61,8 +61,8 @@ services:
   # Frontend React
   frontend:
     build:
-      context: ./frontend
-      dockerfile: ../docker/Dockerfile.frontend
+      context: .
+      dockerfile: docker/Dockerfile.frontend
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000/api}
     container_name: v2netwise-frontend

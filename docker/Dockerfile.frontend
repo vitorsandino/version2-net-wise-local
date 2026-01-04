@@ -7,10 +7,11 @@ ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 
 # Copiar package.json e instalar dependências
+# O contexto de build será a raiz do projeto
 COPY frontend/package*.json ./
 RUN npm ci
 
-# Copiar código fonte
+# Copiar código fonte do frontend
 COPY frontend/ ./
 
 # Build da aplicação
@@ -23,6 +24,7 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Configuração customizada do Nginx
+# O contexto de build será a raiz do projeto
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expor porta

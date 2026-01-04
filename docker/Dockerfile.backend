@@ -6,10 +6,11 @@ WORKDIR /app
 RUN apk add --no-cache curl
 
 # Copiar package.json e instalar dependências
+# O contexto de build será a raiz do projeto, então o caminho é backend/package*.json
 COPY backend/package*.json ./
 RUN npm ci --only=production
 
-# Copiar código fonte
+# Copiar código fonte do backend
 COPY backend/ ./
 
 # Expor porta
