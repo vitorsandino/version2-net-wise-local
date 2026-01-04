@@ -2,13 +2,13 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copiar package.json
+# Copiar apenas package.json primeiro
 COPY backend/package*.json ./
 
-# Instalar dependências
-RUN npm install --omit=dev
+# Instalar dependências de produção de forma otimizada
+RUN npm install --omit=dev --prefer-offline --no-audit --no-fund
 
-# Copiar código fonte do backend
+# Copiar código fonte
 COPY backend/ ./
 
 # Expor porta

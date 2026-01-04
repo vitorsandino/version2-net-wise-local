@@ -6,16 +6,19 @@ WORKDIR /app
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 
-# Copiar package.json
-COPY frontend/package*.json ./
+# Instalar pnpm para build ultra rápido
+RUN npm install -g pnpm
 
-# Usar npm install em vez de ci para evitar erros de sincronização de lock
-RUN npm install
+# Copiar apenas arquivos de dependências primeiro para aproveitar cache do Docker
+COPY frontend/package.json frontend/pnpm-lock.yaml* frontend/package-lock.json* ./
 
-# Copiar código fonte do frontend
+# Instalar dependências usando cache e modo prefer-offline
+RUN pnpm install --frozen-lockfile || npm install --prefer-offline --no-audit --no-fund
+
+# Copiar o restante do código fonte
 COPY frontend/ ./
 
-# Build da aplicação
+# Build da aplicação (Vite é rápido, o gargalo é o install)
 RUN npm run build
 
 # Estágio de produção com Nginx
