@@ -7,11 +7,24 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import routes from './routes/index.js';
 import pool from './config/database.js';
+import { Server } from 'socket.io';
+import { createServer } from 'http';
+import { setupWebSSH } from './services/webSSHService.js';
 
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
 const PORT = process.env.PORT || 3000;
+
+setupWebSSH(io);
 
 // ===== Middlewares de Segurança =====
 app.use(helmet({
@@ -80,7 +93,7 @@ async function startServer() {
     console.log('✅ Conexão com PostgreSQL estabelecida');
 
     // Iniciar servidor
-    app.listen(PORT, '0.0.0.0', () => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Servidor rodando na porta ${PORT}`);
       console.log(`📡 API disponível em http://localhost:${PORT}/api`);
       console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);

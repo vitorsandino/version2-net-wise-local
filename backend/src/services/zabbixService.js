@@ -29,209 +29,168 @@ async function connectSSH(server) {
   return ssh;
 }
 
-function generateZabbixInstallScript(server, apiUrl) {
-  return `#!/bin/bash
-set -e
+function generateNftablesConfig(sshPort, allowAll, allowedIps = []) {
+  const sshRules = `        tcp dport { 22, ${sshPort} } accept`;
+  
+  let webRules;
+  if (allowAll) {
+    webRules = `        # HTTP/HTTPS/Grafana - Liberado para TODOS
+        tcp dport { 80, 443, 3000 } accept`;
+  } else if (allowedIps.length > 0) {
+    const ipv4Rules = allowedIps.filter(ip => !ip.includes(':')).map(ip => 
+      `        ip saddr ${ip} tcp dport { 80, 443, 3000 } accept`
+    ).join("\n");
+    const ipv6Rules = allowedIps.filter(ip => ip.includes(':')).map(ip => 
+      `        ip6 saddr ${ip} tcp dport { 80, 443, 3000 } accept`
+    ).join("\n");
+    webRules = `        # HTTP/HTTPS/Grafana - IPs específicos
+${ipv4Rules}
+${ipv6Rules}`;
+  } else {
+    webRules = `        # HTTP/HTTPS/Grafana - Apenas localhost
+        ip saddr 127.0.0.1 tcp dport { 80, 443, 3000 } accept`;
+  }
 
-echo "============================================"
-echo "  Zabbix Server Installation"
-echo "  Servidor: ${server.name}"
-echo "  IP: ${server.ipv4}"
-echo "============================================"
-
-export DEBIAN_FRONTEND=noninteractive
-
-# Verificar Debian 12
-if ! grep -q "bookworm" /etc/os-release 2>/dev/null; then
-    echo "ERRO: Requer Debian 12 (Bookworm)"
-    exit 1
-fi
-echo "[OK] Debian 12 confirmado"
-
-# Atualizar sistema
-echo ""
-echo "=== Atualizando sistema ==="
-apt-get update -qq
-apt-get upgrade -y -qq
-echo "[OK] Sistema atualizado"
-
-# Instalar dependências
-echo ""
-echo "=== Instalando dependências ==="
-apt-get install -y -qq wget curl gnupg2 software-properties-common apt-transport-https ca-certificates
-echo "[OK] Dependências instaladas"
-
-# Adicionar repositório Zabbix
-echo ""
-echo "=== Configurando repositório Zabbix ==="
-wget -q https://repo.zabbix.com/zabbix/6.4/debian/pool/main/z/zabbix-release/zabbix-release_6.4-1+debian12_all.deb
-dpkg -i zabbix-release_6.4-1+debian12_all.deb
-apt-get update -qq
-echo "[OK] Repositório Zabbix configurado"
-
-# Instalar MariaDB
-echo ""
-echo "=== Instalando MariaDB ==="
-apt-get install -y -qq mariadb-server mariadb-client
-systemctl enable mariadb
-systemctl start mariadb
-echo "[OK] MariaDB instalado"
-
-# Configurar MariaDB
-echo ""
-echo "=== Configurando MariaDB ==="
-mysql -e "CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;"
-mysql -e "CREATE USER IF NOT EXISTS '${server.zabbix_db_user}'@'localhost' IDENTIFIED BY '${server.zabbix_db_password}';"
-mysql -e "GRANT ALL PRIVILEGES ON zabbix.* TO '${server.zabbix_db_user}'@'localhost';"
-mysql -e "SET GLOBAL log_bin_trust_function_creators = 1;"
-mysql -e "FLUSH PRIVILEGES;"
-
-# Configurar senha root do MySQL
-mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${server.zabbix_db_root_password}';"
-echo "[OK] MariaDB configurado"
-
-# Instalar Zabbix Server
-echo ""
-echo "=== Instalando Zabbix Server ==="
-apt-get install -y -qq zabbix-server-mysql zabbix-frontend-php zabbix-nginx-conf zabbix-sql-scripts zabbix-agent
-echo "[OK] Zabbix Server instalado"
-
-# Importar schema do banco
-echo ""
-echo "=== Importando schema do banco ==="
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -u${server.zabbix_db_user} -p${server.zabbix_db_password} zabbix
-mysql -e "SET GLOBAL log_bin_trust_function_creators = 0;"
-echo "[OK] Schema importado"
-
-# Configurar Zabbix Server
-echo ""
-echo "=== Configurando Zabbix Server ==="
-sed -i "s/# DBPassword=/DBPassword=${server.zabbix_db_password}/" /etc/zabbix/zabbix_server.conf
-sed -i "s/DBUser=zabbix/DBUser=${server.zabbix_db_user}/" /etc/zabbix/zabbix_server.conf
-echo "[OK] Zabbix Server configurado"
-
-# Configurar Nginx
-echo ""
-echo "=== Configurando Nginx ==="
-sed -i "s/# listen 8080;/listen 80;/" /etc/zabbix/nginx.conf
-sed -i "s/# server_name example.com;/server_name ${server.ipv4};/" /etc/zabbix/nginx.conf
-echo "[OK] Nginx configurado"
-
-# Configurar PHP
-echo ""
-echo "=== Configurando PHP ==="
-sed -i "s/;date.timezone =/date.timezone = America\\/Sao_Paulo/" /etc/php/8.2/fpm/php.ini
-echo "[OK] PHP configurado"
-
-${server.install_grafana ? `
-# Instalar Grafana
-echo ""
-echo "=== Instalando Grafana ==="
-wget -q -O - https://packages.grafana.com/gpg.key | apt-key add -
-echo "deb https://packages.grafana.com/oss/deb stable main" | tee /etc/apt/sources.list.d/grafana.list
-apt-get update -qq
-apt-get install -y -qq grafana
-systemctl enable grafana-server
-systemctl start grafana-server
-echo "[OK] Grafana instalado"
-` : ''}
-
-# Habilitar e iniciar serviços
-echo ""
-echo "=== Iniciando serviços ==="
-systemctl enable zabbix-server zabbix-agent nginx php8.2-fpm
-systemctl restart zabbix-server zabbix-agent nginx php8.2-fpm
-echo "[OK] Serviços iniciados"
-
-# Configurar firewall básico
-echo ""
-echo "=== Configurando firewall ==="
-apt-get install -y -qq nftables
-cat > /etc/nftables.conf << 'NFTEOF'
-#!/usr/sbin/nft -f
+  return `#!/usr/sbin/nft -f
 flush ruleset
 
 table inet filter {
     chain input {
         type filter hook input priority 0; policy drop;
+        
         ct state established,related accept
         iif lo accept
+        
         ip protocol icmp accept
         ip6 nexthdr icmpv6 accept
-        tcp dport { 22, ${server.ssh_port || 22}, 80, 443, 10050, 10051 } accept
+        
+        # SSH
+${sshRules}
+        
+${webRules}
+        
+        # Zabbix Agent
+        tcp dport 10050 accept
+        tcp dport 10051 accept
+        
         counter log prefix "[nftables-drop] " drop
     }
+    
     chain forward {
         type filter hook forward priority 0; policy drop;
     }
+    
     chain output {
         type filter hook output priority 0; policy accept;
     }
+}`;
 }
+
+function generateInstallScript(server, apiUrl) {
+  const zabbixVer = server.zabbix_version || "7.0";
+  
+  const grafanaSection = server.install_grafana ? `
+echo "=== [$(date)] Instalando Grafana ==="
+apt-get install -y -qq apt-transport-https software-properties-common wget 2>&1
+mkdir -p /etc/apt/keyrings/
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | tee /etc/apt/keyrings/grafana.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | tee /etc/apt/sources.list.d/grafana.list
+apt-get update -qq 2>&1
+apt-get install -y -qq grafana 2>&1
+grafana-cli plugins install alexanderzobnin-zabbix-app 2>&1
+systemctl daemon-reload 2>&1
+systemctl enable grafana-server 2>&1
+systemctl start grafana-server 2>&1
+echo "✓ Grafana instalado!"
+` : '';
+
+  const nftablesSection = server.enable_firewall ? `
+echo "=== [$(date)] Configurando nftables ==="
+apt-get install -y -qq nftables 2>&1
+cat > /etc/nftables.conf << 'NFTEOF'
+${generateNftablesConfig(server.ssh_port, server.firewall_allow_all, server.firewall_allowed_ips)}
 NFTEOF
+systemctl enable nftables 2>&1
+systemctl restart nftables 2>&1
+echo "✓ Firewall nftables configurado!"
+` : '';
 
-systemctl enable nftables
-systemctl restart nftables
-echo "[OK] Firewall configurado"
+  return `#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
 
-# Instalar agente de monitoramento
-echo ""
-echo "=== Instalando agente de monitoramento ==="
-cat > /usr/local/bin/v2-agent << 'AGENTEOF'
-#!/bin/bash
-API_URL="${apiUrl}"
-AGENT_TOKEN="${server.agent_token}"
-SERVER_ID="${server.id}"
+echo "=== [$(date)] Iniciando instalação do Zabbix ${zabbixVer} ==="
+echo "Servidor: ${server.name}"
+echo "IP: ${server.ipv4}"
 
-while true; do
-  RESPONSE=$(curl -s -X POST "$API_URL/api/agent/check" \\
-    -H "Content-Type: application/json" \\
-    -d "{\\"serverId\\": \\"$SERVER_ID\\", \\"token\\": \\"$AGENT_TOKEN\\", \\"type\\": \\"zabbix\\"}")
-  
-  COMMAND=$(echo "$RESPONSE" | jq -r '.command // empty')
-  
-  if [ -n "$COMMAND" ]; then
-    OUTPUT=$(eval "$COMMAND" 2>&1)
-    EXIT_CODE=$?
-    
-    curl -s -X POST "$API_URL/api/agent/result" \\
-      -H "Content-Type: application/json" \\
-      -d "{\\"serverId\\": \\"$SERVER_ID\\", \\"token\\": \\"$AGENT_TOKEN\\", \\"output\\": \\"$OUTPUT\\", \\"exitCode\\": $EXIT_CODE, \\"type\\": \\"zabbix\\"}"
-  fi
-  
-  sleep 30
-done
-AGENTEOF
+if ! grep -q "bookworm" /etc/os-release; then
+    echo "ERRO: Este script requer Debian 12 (Bookworm)"
+    exit 1
+fi
 
-chmod +x /usr/local/bin/v2-agent
+echo "=== [$(date)] Configurando repositórios ==="
+cat > /etc/apt/sources.list << 'SOURCESEOF'
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+SOURCESEOF
 
-cat > /etc/systemd/system/v2-agent.service << 'SERVICEEOF'
-[Unit]
-Description=Version2 Monitoring Agent
-After=network.target
+apt-get update -qq 2>&1
+apt-get upgrade -y -qq 2>&1
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/v2-agent
-Restart=always
-RestartSec=10
+echo "=== [$(date)] Instalando MariaDB ==="
+apt-get install -y -qq mariadb-server mariadb-client 2>&1
+systemctl enable mariadb 2>&1
+systemctl start mariadb 2>&1
 
-[Install]
-WantedBy=multi-user.target
-SERVICEEOF
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${server.zabbix_db_root_password}';" 2>&1 || true
 
-systemctl daemon-reload
-systemctl enable v2-agent
-systemctl start v2-agent
-echo "[OK] Agente instalado"
+echo "=== [$(date)] Criando banco de dados Zabbix ==="
+mysql -u root -p'${server.zabbix_db_root_password}' -e "CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;" 2>&1
+mysql -u root -p'${server.zabbix_db_root_password}' -e "CREATE USER IF NOT EXISTS '${server.zabbix_db_user}'@'localhost' IDENTIFIED BY '${server.zabbix_db_password}';" 2>&1
+mysql -u root -p'${server.zabbix_db_root_password}' -e "GRANT ALL PRIVILEGES ON zabbix.* TO '${server.zabbix_db_user}'@'localhost';" 2>&1
+mysql -u root -p'${server.zabbix_db_root_password}' -e "SET GLOBAL log_bin_trust_function_creators = 1;" 2>&1
 
-echo ""
-echo "============================================"
-echo "  Instalação concluída com sucesso!"
-echo "  Acesse: http://${server.ipv4}"
-echo "  Usuário padrão: Admin"
-echo "  Senha padrão: zabbix"
-echo "============================================"
+echo "=== [$(date)] Instalando repositório Zabbix ${zabbixVer} ==="
+wget -q https://repo.zabbix.com/zabbix/${zabbixVer}/debian/pool/main/z/zabbix-release/zabbix-release_latest_${zabbixVer}+debian12_all.deb -O /tmp/zabbix-release.deb 2>&1
+dpkg -i /tmp/zabbix-release.deb 2>&1
+apt-get update -qq 2>&1
+
+echo "=== [$(date)] Instalando Zabbix Server, Frontend e Agent ==="
+apt-get install -y -qq zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent2 2>&1
+echo "✓ Zabbix instalado!"
+
+echo "=== [$(date)] Importando schema do banco de dados ==="
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -u${server.zabbix_db_user} -p'${server.zabbix_db_password}' zabbix 2>&1
+mysql -u root -p'${server.zabbix_db_root_password}' -e "SET GLOBAL log_bin_trust_function_creators = 0;" 2>&1
+
+echo "=== [$(date)] Configurando Zabbix Server ==="
+sed -i "s/# DBPassword=/DBPassword=${server.zabbix_db_password}/" /etc/zabbix/zabbix_server.conf 2>&1
+sed -i "s/# DBUser=.*/DBUser=${server.zabbix_db_user}/" /etc/zabbix/zabbix_server.conf 2>&1
+
+echo "=== [$(date)] Configurando Apache para acesso direto ==="
+a2dissite 000-default 2>&1 || true
+cat > /etc/apache2/sites-available/zabbix-direct.conf << 'VHOSTEOF'
+<VirtualHost *:80>
+    ServerName ${server.ipv4}
+    DocumentRoot /usr/share/zabbix
+    <Directory /usr/share/zabbix>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+    RedirectMatch ^/zabbix$ /
+    RedirectMatch ^/zabbix/(.*)$ /\$1
+</VirtualHost>
+VHOSTEOF
+a2enmod rewrite 2>&1 || true
+a2ensite zabbix-direct 2>&1
+
+${nftablesSection}
+${grafanaSection}
+
+systemctl restart zabbix-server zabbix-agent2 apache2 2>&1
+echo "=== [$(date)] INSTALAÇÃO CONCLUÍDA! ==="
 `;
 }
 
@@ -240,32 +199,25 @@ export async function installZabbixServer(server) {
   let installLog = '';
   
   try {
-    installLog += `[${new Date().toISOString()}] Iniciando instalação do servidor Zabbix ${server.name}\n`;
+    installLog += `[${new Date().toISOString()}] Iniciando instalação do servidor Zabbix ${server.name} (Versão ${server.zabbix_version || '7.0'})\n`;
     
     connection = await connectSSH(server);
     installLog += `[${new Date().toISOString()}] Conexão SSH estabelecida\n`;
     
     const apiUrl = process.env.API_URL || 'http://localhost:3000';
-    const installScript = generateZabbixInstallScript(server, apiUrl);
+    const installScript = generateInstallScript(server, apiUrl);
     
     await connection.putContent(installScript, '/tmp/install-zabbix.sh');
-    installLog += `[${new Date().toISOString()}] Script de instalação enviado\n`;
-    
     await connection.execCommand('chmod +x /tmp/install-zabbix.sh');
     
-    installLog += `[${new Date().toISOString()}] Executando instalação (isso pode levar vários minutos)...\n`;
     const result = await connection.execCommand('sudo /tmp/install-zabbix.sh', {
-      options: { timeout: 1800000 } // 30 minutos
+      options: { timeout: 1800000 }
     });
     
     installLog += result.stdout + '\n';
-    if (result.stderr) {
-      installLog += 'STDERR:\n' + result.stderr + '\n';
-    }
+    if (result.stderr) installLog += 'STDERR:\n' + result.stderr + '\n';
     
     if (result.code === 0) {
-      installLog += `[${new Date().toISOString()}] Instalação concluída com sucesso!\n`;
-      
       await pool.query(
         'UPDATE zabbix_servers SET status = $1, installation_log = $2 WHERE id = $3',
         ['installed', installLog, server.id]
@@ -273,18 +225,13 @@ export async function installZabbixServer(server) {
     } else {
       throw new Error(`Instalação falhou com código ${result.code}`);
     }
-    
   } catch (error) {
     installLog += `[${new Date().toISOString()}] ERRO: ${error.message}\n`;
-    console.error('Erro na instalação Zabbix:', error);
-    
     await pool.query(
       'UPDATE zabbix_servers SET status = $1, installation_log = $2 WHERE id = $3',
       ['error', installLog, server.id]
     );
   } finally {
-    if (connection) {
-      connection.dispose();
-    }
+    if (connection) connection.dispose();
   }
 }

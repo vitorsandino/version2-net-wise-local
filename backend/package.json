@@ -25,6 +25,7 @@
     "helmet": "^7.1.0",
     "express-rate-limit": "^7.1.5",
     "morgan": "^1.10.0",
+    "socket.io": "^4.7.2",
     "compression": "^1.7.4",
     "express-validator": "^7.0.1",
     "node-cron": "^3.0.3",
