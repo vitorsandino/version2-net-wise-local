@@ -1,0 +1,19 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Instalar dependências do sistema
+RUN apk add --no-cache curl
+
+# Copiar package.json e instalar dependências
+COPY backend/package*.json ./
+RUN npm ci --only=production
+
+# Copiar código fonte
+COPY backend/ ./
+
+# Expor porta
+EXPOSE 3000
+
+# Comando de inicialização
+CMD ["node", "src/server.js"]
